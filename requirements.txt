@@ -1,4 +1,3 @@
---no-cache-dir
 streamlit
 google-generativeai
 python-dotenv
