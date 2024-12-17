@@ -1,3 +1,5 @@
+pip install streamlit google-generativeai python-dotenv langchain PyPDF2 chromadb faiss-cpu langchain_google_genai
+
 import streamlit as st
 from PyPDF2 import PdfReader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
