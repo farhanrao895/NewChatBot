@@ -13,7 +13,6 @@ from langchain.memory import ConversationBufferWindowMemory
 from langchain.schema import Document
 
 
-GOOGLE_API_KEY="AIzaSyActiyg-nn8f5OwKiMyDfE0Kho2kv3B9Jg"
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
 def get_pdf_text(pdf_docs):
