@@ -13,6 +13,7 @@ from langchain.memory import ConversationBufferWindowMemory
 from langchain.schema import Document
 from dotenv import load_dotenv
 
+GOOGLE_API_KEY=AIzaSyActiyg-nn8f5OwKiMyDfE0Kho2kv3B9Jg
 load_dotenv()
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
