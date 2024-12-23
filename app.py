@@ -1,5 +1,5 @@
-
 import streamlit as st
+import io as io
 from PyPDF2 import PdfReader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 import os
@@ -12,35 +12,77 @@ from langchain.prompts import PromptTemplate
 from langchain.memory import ConversationBufferWindowMemory
 from langchain.schema import Document
 from dotenv import load_dotenv
+import requests
+import base64
 
 load_dotenv()
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
-def get_pdf_text(pdf_docs):
-    """Extract text from PDF files and count successes and failures."""
+# Azure AD credentials
+tenant_id = "73b32ac8-173b-4ddc-ad2e-acba48de9843"
+client_id = "c39cfc40-36ca-465e-bc63-fb8de4372ff9"
+client_secret = "Mgg8Q~zfDp6y-CKJ4Nqta75n1z6-A4PYe9SwLa5d"
+# sharing_url=""
+# sharing_url = "https://freyssinetsa-my.sharepoint.com/:f:/g/personal/joel_a_fsa_com_sa/Ei0JHI3cQ-9AnWNT_raORLwBspJ513ffBE3H8h4x2t5fsA?e=2PxUcO"
+
+def get_access_token():
+    auth_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+    payload = {
+        "grant_type": "client_credentials",
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "scope": "https://graph.microsoft.com/.default"
+    }
+    response = requests.post(auth_url, data=payload)
+    response.raise_for_status()
+    return response.json().get("access_token")
+
+def get_graph_share_id(sharing_url):
+    print('sharingurl',sharing_url)
+    encoded_url = base64.urlsafe_b64encode(sharing_url.encode("utf-8")).decode("utf-8").strip("=")
+    return f"u!{encoded_url}"
+
+def fetch_shared_files(access_token, graph_share_id):
+    url = f"https://graph.microsoft.com/v1.0/shares/{graph_share_id}/driveItem/children"
+    headers = {"Authorization": f"Bearer {access_token}"}
+    response = requests.get(url, headers=headers)
+    response.raise_for_status()
+    files = response.json().get("value", [])
+    return files
+
+def download_file(file_url, access_token):
+    headers = {"Authorization": f"Bearer {access_token}"}
+    response = requests.get(file_url, headers=headers)
+    response.raise_for_status()
+    return response.content
+
+def process_pdf_files(files, access_token):
+    """Fetch and process PDF files from SharePoint."""
     text = ""
-    success_count = 0  
-    failure_count = 0  
+    success_count = 0
+    failure_count = 0
 
-    for pdf in pdf_docs:
-        try:
-            pdf_reader = PdfReader(pdf)
-            if not pdf_reader.pages:
-                st.error(f"Error reading {pdf.name}: The PDF has no pages.")
+    for file in files:
+        if "file" in file and file["name"].endswith(".pdf"):
+            file_url = file["@microsoft.graph.downloadUrl"]
+            try:
+                # Download the PDF content
+                pdf_content = download_file(file_url, access_token)
+
+                # Wrap the bytes content in a BytesIO object
+                pdf_file = io.BytesIO(pdf_content)
+
+                # Read the PDF using PdfReader
+                pdf_reader = PdfReader(pdf_file)
+                for page in pdf_reader.pages:
+                    text += page.extract_text()
+                success_count += 1
+            except Exception as e:
+                st.error(f"Error processing file {file['name']}: {e}")
                 failure_count += 1
-                continue  
-
-            for page in pdf_reader.pages:
-                page_text = page.extract_text()
-                if page_text:
-                    text += page_text
-            success_count += 1  
-
-        except Exception as e:
-            st.error(f"Error reading {pdf.name}: {e}")
-            failure_count += 1  
 
     return text, success_count, failure_count
+
 
 def get_text_chunks(text):
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=12500, chunk_overlap=2000)
@@ -130,29 +172,38 @@ def main():
     if "all_chunks" not in st.session_state:
         st.session_state.all_chunks = []
 
-    # Sidebar for uploading PDFs
+  # Initialize or retrieve sharing_url in session state
+    if "sharing_url" not in st.session_state:
+        st.session_state.sharing_url = ""
+     
+  # Sidebar to fetch files from SharePoint
     with st.sidebar:
         st.title("Menu:")
-        pdf_docs = st.file_uploader(
-            "Upload your PDF Files and Click on the Submit & Process Button",
-            accept_multiple_files=True,
-            type=["pdf"]
+        st.session_state.sharing_url = st.text_input(
+            "Enter Sharepoint Sharing URL:", 
+            value=st.session_state.sharing_url
         )
-        if st.button("Submit & Process"):
-            if not pdf_docs:
-                st.warning("Please upload at least one PDF file.")
-            else:
-                with st.spinner("Processing..."):
-                    # Extract text and get counts
-                    raw_text, success, failure = get_pdf_text(pdf_docs)
+        if st.button("Fetch and Process Files from SharePoint"):
+            with st.spinner("Fetching files from SharePoint..."):
+                try:
+                    access_token = get_access_token()
+                    graph_share_id = get_graph_share_id(st.session_state.sharing_url)
+                    files = fetch_shared_files(access_token, graph_share_id)
+                    raw_text, success, failure = process_pdf_files(files, access_token)
                     text_chunks = get_text_chunks(raw_text)
                     get_vector_store(text_chunks)
                     st.session_state.all_chunks = text_chunks
-                    st.success(f"Processing complete.\nSuccessfully processed {success} file(s).\nFailed to process {failure} file(s).")
+                    st.success(f"Successfully processed {success} file(s), failed {failure} file(s).")
+                except Exception as e:
+                    st.error(f"Error fetching files: {e}")
 
-    for i, chat in enumerate(st.session_state.chat_history[-10:], 1):
-        st.write(f"Q{i}: {chat['question']}")
-        st.write(f"A{i}: {chat['answer']}")
+    # Display chat history
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+
+    for chat in st.session_state.chat_history[-10:]:
+        st.write(f"Q: {chat['question']}")
+        st.write(f"A: {chat['answer']}")
 
     # Input field for new questions
     user_question = st.text_input("Ask another question")
